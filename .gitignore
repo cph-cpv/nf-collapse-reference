@@ -1,0 +1,11 @@
+.nextflow
+
+input
+results
+work
+
+nextflow.config
+reference.json*
+*.tar.gz
+*.csv
+
