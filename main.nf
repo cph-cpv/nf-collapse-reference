@@ -1,60 +1,95 @@
 #!/usr/bin/env nextflow
 
-params.reference_json = file("input/reference.json")
 
 
+workflow {
+    def finish_py = file("finish.py")
+    def organize_sequences_py = file("organize_sequences.py")
+    def repair_py = file("repair.py")
 
+    repaired_reference_path = repairReference(file("input/reference.json"), repair_py)
 
-process createClusterDirs {
-    publishDir "results/clusters", mode: 'copy'
+    otu_paths = organizeSequences(repaired_reference_path, organize_sequences_py) | flatten
+
+    cluster_paths = otu_paths
+        | flatMap { p ->
+            p.listFiles().collect { fp -> tuple(p.baseName, fp) }
+        }
+        | clusterWithCdhit
+        | collect
+
+    finish(cluster_paths, repaired_reference_path, finish_py)
+}
+
+process repairReference {
+    input:
+    path reference
+    path repair_py
+
+    output:
+    path "reference.json"
+
+    script:
+    """
+    python3 ${repair_py} ${reference}
+    mv reference_repaired.json reference.json
+    """
+}
+
+process organizeSequences {
+    cpus 1
+    memory "200 MB"
 
     input:
     path reference
-    path write_clusters
+    path organize_sequences_py
 
     output:
-    path "otus/*"
+    path "output/*"
 
     script:
     """
-    python3 ${write_clusters} ${reference} otus
+    python3 ${organize_sequences_py} ${reference} output
     """
 }
 
-process clusterWithMmseqs {
-    publishDir "results/clustered"
-
-    cpus 2
-    memory '15 GB'
+process clusterWithCdhit {
+    cache "lenient"
+    cpus 3
+    memory "12 GB"
 
     input:
-    tuple(path(otu_path),  path(fasta_path))
+    tuple val(otu_id), path(segment_path)
 
     output:
-    path "**/*.{tsv,fa,fasta}"
+    path "output_*"
 
     script:
-    """
-    mmseqs easy-cluster --threads 4 -c 0.99 --split-memory-limit 15G ${otu_path}/${fasta_path} '${otu_path}/${fasta_path.baseName}' \$(mktemp -d mmseqs-cluster-XXXXXXXX)
-    """
-
-    stub:
-    """
-    tree ${otu_path} > content.txt
-    ls -lh ${otu_path}/${fasta_path} >> content.txt
-    echo "${otu_path}/${fasta_path.baseName}" >> content.txt
+    def output_path = "output_${otu_id}_${segment_path.baseName}"
+    """                          
+    mkdir -p '${output_path}'    
+    cd-hit-est -T 2 -d 0 -c 0.99 -M 10000 -i '${segment_path / "sequences.fa"}' -o '${output_path}/clustered.fa'
     """
 }
 
-workflow {
-    def write_clusters = file("write_clusters.py")
 
-    // First, create OTU directories
-    otu_paths = createClusterDirs(params.reference_json, write_clusters)
-    otu_paths
-        | flatten
-        | flatMap { 
-            p -> p.listFiles().collect { fp -> tuple(p, fp) }
-        }
-        | clusterWithMmseqs    
+process finish {
+    debug true
+
+    publishDir "results"
+
+    input:
+    path cluster_path
+    path reference
+    path finish_py
+
+    output:
+    path "reps.fa"
+    path "reps_by_sequence.csv"
+    path "summary.txt"
+
+    script:
+    """
+    python3 ${finish_py} ${reference}
+    """
 }

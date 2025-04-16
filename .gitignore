@@ -1,11 +1,12 @@
 .nextflow
+.vscode
 
 input
 results
 work
 
+*.csv
+*.tar.gz
+*.nextflow.log*
 nextflow.config
 reference.json*
-*.tar.gz
-*.csv
-
